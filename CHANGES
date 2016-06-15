@@ -3,11 +3,39 @@ Flask Changelog
 
 Here you can see the full list of changes between each Flask release.
 
-Version 1.0
------------
+Version 0.12
+------------
 
-(release date to be announced, codename to be selected)
+- the cli command now responds to `--version`.
+- Mimetype guessing for ``send_file`` has been removed, as per issue ``#104``.
+  See pull request ``#1849``.
+- Make ``flask.safe_join`` able to join multiple paths like ``os.path.join``
+  (pull request ``#1730``).
 
+Version 0.11.2
+--------------
+
+Bugfix release, unreleased
+
+- Fix crash when running under PyPy3, see pull request ``#1814``.
+
+Version 0.11.1
+--------------
+
+Bugfix release, released on June 7th 2016.
+
+- Fixed a bug that prevented ``FLASK_APP=foobar/__init__.py`` from working. See
+  pull request ``#1872``.
+
+Version 0.11
+------------
+
+Released on May 29th 2016, codename Absinthe.
+
+- Added support to serializing top-level arrays to :func:`flask.jsonify`. This
+  introduces a security risk in ancient browsers. See
+  :ref:`json-security` for details.
+- Added before_render_template signal.
 - Added `**kwargs` to :meth:`flask.Test.test_client` to support passing
   additional keyword arguments to the constructor of
   :attr:`flask.Flask.test_client_class`.
@@ -22,7 +50,7 @@ Version 1.0
   from a view function.
 - Added :meth:`flask.Config.from_json`.
 - Added :attr:`flask.Flask.config_class`.
-- Added :meth:`flask.config.Config.get_namespace`.
+- Added :meth:`flask.Config.get_namespace`.
 - Templates are no longer automatically reloaded outside of debug mode. This
   can be configured with the new ``TEMPLATES_AUTO_RELOAD`` config key.
 - Added a workaround for a limitation in Python 3.3's namespace loader.
@@ -42,7 +70,7 @@ Version 1.0
 - Flask will now log by default even if debug is disabled.  The log format is
   now hardcoded but the default log handling can be disabled through the
   ``LOGGER_HANDLER_POLICY`` configuration key.
-- Removed deprecate module functionality.
+- Removed deprecated module functionality.
 - Added the ``EXPLAIN_TEMPLATE_LOADING`` config flag which when enabled will
   instruct Flask to explain how it locates templates.  This should help
   users debug when the wrong templates are loaded.
@@ -53,7 +81,28 @@ Version 1.0
 - Add "pretty" and "compressed" separators definitions in jsonify() method.
   Reduces JSON response size when JSONIFY_PRETTYPRINT_REGULAR=False by removing
   unnecessary white space included by default after separators.
-
+- JSON responses are now terminated with a newline character, because it is a
+  convention that UNIX text files end with a newline and some clients don't
+  deal well when this newline is missing. See
+  https://github.com/pallets/flask/pull/1262 -- this came up originally as a
+  part of https://github.com/kennethreitz/httpbin/issues/168
+- The automatically provided ``OPTIONS`` method is now correctly disabled if
+  the user registered an overriding rule with the lowercase-version
+  ``options`` (issue ``#1288``).
+- ``flask.json.jsonify`` now supports the ``datetime.date`` type (pull request
+  ``#1326``).
+- Don't leak exception info of already catched exceptions to context teardown
+  handlers (pull request ``#1393``).
+- Allow custom Jinja environment subclasses (pull request ``#1422``).
+- ``flask.g`` now has ``pop()`` and ``setdefault`` methods.
+- Turn on autoescape for ``flask.templating.render_template_string`` by default
+  (pull request ``#1515``).
+- ``flask.ext`` is now deprecated (pull request ``#1484``).
+- ``send_from_directory`` now raises BadRequest if the filename is invalid on
+  the server OS (pull request ``#1763``).
+- Added the ``JSONIFY_MIMETYPE`` configuration variable (pull request ``#1728``).
+- Exceptions during teardown handling will no longer leave bad application
+  contexts lingering around.
 
 Version 0.10.2
 --------------
@@ -75,6 +124,8 @@ Version 0.10.2
 - Changed logic of before first request handlers to flip the flag after
   invoking.  This will allow some uses that are potentially dangerous but
   should probably be permitted.
+- Fixed Python 3 bug when a handler from `app.url_build_error_handlers`
+  reraises the `BuildError`.
 
 Version 0.10.1
 --------------
@@ -94,7 +145,7 @@ Version 0.10.1
 Version 0.10
 ------------
 
-Released on June 13nd 2013, codename Limoncello.
+Released on June 13th 2013, codename Limoncello.
 
 - Changed default cookie serialization format from pickle to JSON to
   limit the impact an attacker can do if the secret key leaks.  See

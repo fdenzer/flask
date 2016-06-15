@@ -6,7 +6,7 @@
     Blueprints are the recommended way to implement larger or more
     pluggable applications in Flask 0.7 and later.
 
-    :copyright: (c) 2014 by Armin Ronacher.
+    :copyright: (c) 2015 by Armin Ronacher.
     :license: BSD, see LICENSE for more details.
 """
 from functools import update_wrapper
@@ -101,7 +101,6 @@ class Blueprint(_PackageBoundObject):
         self.static_folder = static_folder
         self.static_url_path = static_url_path
         self.deferred_functions = []
-        self.view_functions = {}
         if url_defaults is None:
             url_defaults = {}
         self.url_values_defaults = url_defaults

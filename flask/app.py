@@ -5,24 +5,25 @@
 
     This module implements the central WSGI application object.
 
-    :copyright: (c) 2014 by Armin Ronacher.
+    :copyright: (c) 2015 by Armin Ronacher.
     :license: BSD, see LICENSE for more details.
 """
-
 import os
 import sys
 from threading import Lock
 from datetime import timedelta
 from itertools import chain
 from functools import update_wrapper
+from collections import deque
 
 from werkzeug.datastructures import ImmutableDict
 from werkzeug.routing import Map, Rule, RequestRedirect, BuildError
 from werkzeug.exceptions import HTTPException, InternalServerError, \
-     MethodNotAllowed, BadRequest
+     MethodNotAllowed, BadRequest, default_exceptions
 
 from .helpers import _PackageBoundObject, url_for, get_flashed_messages, \
-     locked_cached_property, _endpoint_from_view_func, find_package
+     locked_cached_property, _endpoint_from_view_func, find_package, \
+     get_debug_flag
 from . import json, cli
 from .wrappers import Request, Response
 from .config import ConfigAttribute, Config
@@ -37,6 +38,9 @@ from ._compat import reraise, string_types, text_type, integer_types
 
 # a lock used for logger initialization
 _logger_lock = Lock()
+
+# a singleton sentinel value for parameter defaults
+_sentinel = object()
 
 
 def _make_timedelta(value):
@@ -117,7 +121,7 @@ class Flask(_PackageBoundObject):
        The `instance_path` and `instance_relative_config` parameters were
        added.
 
-    .. versionadded:: 1.0
+    .. versionadded:: 0.11
        The `root_path` parameter was added.
 
     :param import_name: the name of the application package
@@ -154,13 +158,18 @@ class Flask(_PackageBoundObject):
     #: :class:`~flask.Response` for more information.
     response_class = Response
 
+    #: The class that is used for the Jinja environment.
+    #:
+    #: .. versionadded:: 0.11
+    jinja_environment = Environment
+
     #: The class that is used for the :data:`~flask.g` instance.
     #:
     #: Example use cases for a custom class:
     #:
     #: 1. Store arbitrary attributes on flask.g.
     #: 2. Add a property for lazy per-request database connectors.
-    #: 3. Return None instead of AttributeError on expected attributes.
+    #: 3. Return None instead of AttributeError on unexpected attributes.
     #: 4. Raise exception if an unexpected attr is set, a "controlled" flask.g.
     #:
     #: In Flask 0.9 this property was called `request_globals_class` but it
@@ -190,7 +199,7 @@ class Flask(_PackageBoundObject):
     #: 1. Default values for certain config options.
     #: 2. Access to config values through attributes in addition to keys.
     #:
-    #: .. versionadded:: 1.0
+    #: .. versionadded:: 0.11
     config_class = Config
 
     #: The debug flag.  Set this to ``True`` to enable debugging of the
@@ -238,6 +247,16 @@ class Flask(_PackageBoundObject):
     permanent_session_lifetime = ConfigAttribute('PERMANENT_SESSION_LIFETIME',
         get_converter=_make_timedelta)
 
+    #: A :class:`~datetime.timedelta` which is used as default cache_timeout
+    #: for the :func:`send_file` functions. The default is 12 hours.
+    #:
+    #: This attribute can also be configured from the config with the
+    #: ``SEND_FILE_MAX_AGE_DEFAULT`` configuration key. This configuration
+    #: variable can also be set with an integer value used as seconds.
+    #: Defaults to ``timedelta(hours=12)``
+    send_file_max_age_default = ConfigAttribute('SEND_FILE_MAX_AGE_DEFAULT',
+        get_converter=_make_timedelta)
+
     #: Enable this if you want to use the X-Sendfile feature.  Keep in
     #: mind that the server has to support this.  This only affects files
     #: sent with the :func:`send_file` method.
@@ -271,7 +290,7 @@ class Flask(_PackageBoundObject):
 
     #: Default configuration parameters.
     default_config = ImmutableDict({
-        'DEBUG':                                False,
+        'DEBUG':                                get_debug_flag(default=False),
         'TESTING':                              False,
         'PROPAGATE_EXCEPTIONS':                 None,
         'PRESERVE_CONTEXT_ON_EXCEPTION':        None,
@@ -289,7 +308,7 @@ class Flask(_PackageBoundObject):
         'SESSION_COOKIE_SECURE':                False,
         'SESSION_REFRESH_EACH_REQUEST':         True,
         'MAX_CONTENT_LENGTH':                   None,
-        'SEND_FILE_MAX_AGE_DEFAULT':            12 * 60 * 60,  # 12 hours
+        'SEND_FILE_MAX_AGE_DEFAULT':            timedelta(hours=12),
         'TRAP_BAD_REQUEST_ERRORS':              False,
         'TRAP_HTTP_EXCEPTIONS':                 False,
         'EXPLAIN_TEMPLATE_LOADING':             False,
@@ -297,6 +316,7 @@ class Flask(_PackageBoundObject):
         'JSON_AS_ASCII':                        True,
         'JSON_SORT_KEYS':                       True,
         'JSONIFY_PRETTYPRINT_REGULAR':          True,
+        'JSONIFY_MIMETYPE':                     'application/json',
         'TEMPLATES_AUTO_RELOAD':                None,
     })
 
@@ -403,9 +423,8 @@ class Flask(_PackageBoundObject):
         #: A dictionary with lists of functions that should be called after
         #: each request.  The key of the dictionary is the name of the blueprint
         #: this function is active for, ``None`` for all requests.  This can for
-        #: example be used to open database connections or getting hold of the
-        #: currently logged in user.  To register a function here, use the
-        #: :meth:`after_request` decorator.
+        #: example be used to close database connections. To register a function
+        #: here, use the :meth:`after_request` decorator.
         self.after_request_funcs = {}
 
         #: A dictionary with lists of functions that are called after
@@ -463,7 +482,7 @@ class Flask(_PackageBoundObject):
         #: A list of shell context processor functions that should be run
         #: when a shell context is created.
         #:
-        #: .. versionadded:: 1.0
+        #: .. versionadded:: 0.11
         self.shell_context_processors = []
 
         #: all the attached blueprints in a dictionary by name.  Blueprints
@@ -528,7 +547,7 @@ class Flask(_PackageBoundObject):
         #: provided by Flask itself and can be overridden.
         #:
         #: This is an instance of a :class:`click.Group` object.
-        self.cli = cli.AppGroup(self)
+        self.cli = cli.AppGroup(self.name)
 
     def _get_error_handlers(self):
         from warnings import warn
@@ -665,7 +684,7 @@ class Flask(_PackageBoundObject):
         this function to customize the behavior.
 
         .. versionadded:: 0.5
-        .. versionchanged:: 1.0
+        .. versionchanged:: 0.11
            ``Environment.auto_reload`` set in accordance with
            ``TEMPLATES_AUTO_RELOAD`` configuration option.
         """
@@ -677,7 +696,7 @@ class Flask(_PackageBoundObject):
                 options['auto_reload'] = self.config['TEMPLATES_AUTO_RELOAD']
             else:
                 options['auto_reload'] = self.debug
-        rv = Environment(self, **options)
+        rv = self.jinja_environment(self, **options)
         rv.globals.update(
             url_for=url_for,
             get_flashed_messages=get_flashed_messages,
@@ -716,12 +735,12 @@ class Flask(_PackageBoundObject):
 
     def select_jinja_autoescape(self, filename):
         """Returns ``True`` if autoescaping should be active for the given
-        template name.
+        template name. If no template name is given, returns `True`.
 
         .. versionadded:: 0.5
         """
         if filename is None:
-            return False
+            return True
         return filename.endswith(('.html', '.htm', '.xml', '.xhtml'))
 
     def update_template_context(self, context):
@@ -754,7 +773,7 @@ class Flask(_PackageBoundObject):
         application.  This runs all the registered shell context
         processors.
 
-        .. versionadded:: 1.0
+        .. versionadded:: 0.11
         """
         rv = {'app': self, 'g': g}
         for processor in self.shell_context_processors:
@@ -762,8 +781,13 @@ class Flask(_PackageBoundObject):
         return rv
 
     def run(self, host=None, port=None, debug=None, **options):
-        """Runs the application on a local development server.  If the
-        :attr:`debug` flag is set the server will automatically reload
+        """Runs the application on a local development server.
+
+        Do not use ``run()`` in a production setting. It is not intended to
+        meet security and performance requirements for a production server.
+        Instead, see :ref:`deployment` for WSGI server recommendations.
+
+        If the :attr:`debug` flag is set the server will automatically reload
         for code changes and show a debugger in case an exception happened.
 
         If you want to run the application in debug mode, but disable the
@@ -773,8 +797,7 @@ class Flask(_PackageBoundObject):
 
         It is not recommended to use this function for development with
         automatic reloading as this is badly supported.  Instead you should
-        be using the :command:`flask` command line script's ``runserver``
-        support.
+        be using the :command:`flask` command line script's ``run`` support.
 
         .. admonition:: Keep in Mind
 
@@ -815,6 +838,7 @@ class Flask(_PackageBoundObject):
             self.debug = bool(debug)
         options.setdefault('use_reloader', self.debug)
         options.setdefault('use_debugger', self.debug)
+        options.setdefault('passthrough_errors', True)
         try:
             run_simple(host, port, self, **options)
         finally:
@@ -870,7 +894,7 @@ class Flask(_PackageBoundObject):
            to override the client to be used by setting the
            :attr:`test_client_class` attribute.
 
-        .. versionchanged:: 1.0
+        .. versionchanged:: 0.11
            Added `**kwargs` to support passing additional keyword arguments to
            the constructor of :attr:`test_client_class`.
         """
@@ -931,7 +955,7 @@ class Flask(_PackageBoundObject):
     def iter_blueprints(self):
         """Iterates over all blueprints by the order they were registered.
 
-        .. versionadded:: 1.0
+        .. versionadded:: 0.11
         """
         return iter(self._blueprint_order)
 
@@ -998,7 +1022,7 @@ class Flask(_PackageBoundObject):
         if isinstance(methods, string_types):
             raise TypeError('Allowed methods have to be iterables of strings, '
                             'for example: @app.route(..., methods=["POST"])')
-        methods = set(methods)
+        methods = set(item.upper() for item in methods)
 
         # Methods that should always be added
         required_methods = set(getattr(view_func, 'required_methods', ()))
@@ -1075,6 +1099,21 @@ class Flask(_PackageBoundObject):
             return f
         return decorator
 
+    @staticmethod
+    def _get_exc_class_and_code(exc_class_or_code):
+        """Ensure that we register only exceptions as handler keys"""
+        if isinstance(exc_class_or_code, integer_types):
+            exc_class = default_exceptions[exc_class_or_code]
+        else:
+            exc_class = exc_class_or_code
+
+        assert issubclass(exc_class, Exception)
+
+        if issubclass(exc_class, HTTPException):
+            return exc_class, exc_class.code
+        else:
+            return exc_class, None
+
     @setupmethod
     def errorhandler(self, code_or_exception):
         """A decorator that is used to register a function give a given
@@ -1133,16 +1172,21 @@ class Flask(_PackageBoundObject):
 
     @setupmethod
     def _register_error_handler(self, key, code_or_exception, f):
-        if isinstance(code_or_exception, HTTPException):
-            code_or_exception = code_or_exception.code
-        if isinstance(code_or_exception, integer_types):
-            assert code_or_exception != 500 or key is None, \
-                'It is currently not possible to register a 500 internal ' \
-                'server error on a per-blueprint level.'
-            self.error_handler_spec.setdefault(key, {})[code_or_exception] = f
-        else:
-            self.error_handler_spec.setdefault(key, {}).setdefault(None, []) \
-                .append((code_or_exception, f))
+        """
+        :type key: None|str
+        :type code_or_exception: int|T<=Exception
+        :type f: callable
+        """
+        if isinstance(code_or_exception, HTTPException):  # old broken behavior
+            raise ValueError(
+                'Tried to register a handler for an exception instance {0!r}. '
+                'Handlers can only be registered for exception classes or HTTP error codes.'
+                .format(code_or_exception))
+
+        exc_class, code = self._get_exc_class_and_code(code_or_exception)
+
+        handlers = self.error_handler_spec.setdefault(key, {}).setdefault(code, {})
+        handlers[exc_class] = f
 
     @setupmethod
     def template_filter(self, name=None):
@@ -1243,7 +1287,13 @@ class Flask(_PackageBoundObject):
 
     @setupmethod
     def before_request(self, f):
-        """Registers a function to run before each request."""
+        """Registers a function to run before each request.
+
+        The function will be called without any arguments.
+        If the function returns a non-None value, it's handled as
+        if it was the return value from the view and further
+        request handling is stopped.
+        """
         self.before_request_funcs.setdefault(None, []).append(f)
         return f
 
@@ -1251,6 +1301,9 @@ class Flask(_PackageBoundObject):
     def before_first_request(self, f):
         """Registers a function to be run before the first request to this
         instance of the application.
+
+        The function will be called without any arguments and its return
+        value is ignored.
 
         .. versionadded:: 0.8
         """
@@ -1298,10 +1351,12 @@ class Flask(_PackageBoundObject):
         When a teardown function was called because of a exception it will
         be passed an error object.
 
+        The return values of teardown functions are ignored.
+
         .. admonition:: Debug Note
 
            In debug mode Flask will not tear down a request on an exception
-           immediately.  Instead if will keep it alive so that the interactive
+           immediately.  Instead it will keep it alive so that the interactive
            debugger can still access it.  This behavior can be controlled
            by the ``PRESERVE_CONTEXT_ON_EXCEPTION`` configuration variable.
         """
@@ -1332,6 +1387,8 @@ class Flask(_PackageBoundObject):
         When a teardown function was called because of an exception it will
         be passed an error object.
 
+        The return values of teardown functions are ignored.
+
         .. versionadded:: 0.9
         """
         self.teardown_appcontext_funcs.append(f)
@@ -1347,7 +1404,7 @@ class Flask(_PackageBoundObject):
     def shell_context_processor(self, f):
         """Registers a shell context processor function.
 
-        .. versionadded:: 1.0
+        .. versionadded:: 0.11
         """
         self.shell_context_processors.append(f)
         return f
@@ -1370,6 +1427,44 @@ class Flask(_PackageBoundObject):
         self.url_default_functions.setdefault(None, []).append(f)
         return f
 
+    def _find_error_handler(self, e):
+        """Finds a registered error handler for the request’s blueprint.
+        Otherwise falls back to the app, returns None if not a suitable
+        handler is found.
+        """
+        exc_class, code = self._get_exc_class_and_code(type(e))
+
+        def find_handler(handler_map):
+            if not handler_map:
+                return
+            queue = deque(exc_class.__mro__)
+            # Protect from geniuses who might create circular references in
+            # __mro__
+            done = set()
+
+            while queue:
+                cls = queue.popleft()
+                if cls in done:
+                    continue
+                done.add(cls)
+                handler = handler_map.get(cls)
+                if handler is not None:
+                    # cache for next time exc_class is raised
+                    handler_map[exc_class] = handler
+                    return handler
+
+                queue.extend(cls.__mro__)
+
+        # try blueprint handlers
+        handler = find_handler(self.error_handler_spec
+                               .get(request.blueprint, {})
+                               .get(code))
+        if handler is not None:
+            return handler
+
+        # fall back to app handlers
+        return find_handler(self.error_handler_spec[None].get(code))
+
     def handle_http_exception(self, e):
         """Handles an HTTP exception.  By default this will invoke the
         registered error handlers and fall back to returning the
@@ -1377,15 +1472,12 @@ class Flask(_PackageBoundObject):
 
         .. versionadded:: 0.3
         """
-        handlers = self.error_handler_spec.get(request.blueprint)
         # Proxy exceptions don't have error codes.  We want to always return
         # those unchanged as errors
         if e.code is None:
             return e
-        if handlers and e.code in handlers:
-            handler = handlers[e.code]
-        else:
-            handler = self.error_handler_spec[None].get(e.code)
+
+        handler = self._find_error_handler(e)
         if handler is None:
             return e
         return handler(e)
@@ -1428,19 +1520,14 @@ class Flask(_PackageBoundObject):
         # we cannot prevent users from trashing it themselves in a custom
         # trap_http_exception method so that's their fault then.
 
-        blueprint_handlers = ()
-        handlers = self.error_handler_spec.get(request.blueprint)
-        if handlers is not None:
-            blueprint_handlers = handlers.get(None, ())
-        app_handlers = self.error_handler_spec[None].get(None, ())
-        for typecheck, handler in chain(blueprint_handlers, app_handlers):
-            if isinstance(e, typecheck):
-                return handler(e)
-
         if isinstance(e, HTTPException) and not self.trap_http_exception(e):
             return self.handle_http_exception(e)
 
-        reraise(exc_type, exc_value, tb)
+        handler = self._find_error_handler(e)
+
+        if handler is None:
+            reraise(exc_type, exc_value, tb)
+        return handler(e)
 
     def handle_exception(self, e):
         """Default exception handling that kicks in when an exception
@@ -1454,7 +1541,7 @@ class Flask(_PackageBoundObject):
         exc_type, exc_value, tb = sys.exc_info()
 
         got_request_exception.send(self, exception=e)
-        handler = self.error_handler_spec[None].get(500)
+        handler = self._find_error_handler(InternalServerError())
 
         if self.propagate_exceptions:
             # if we want to repropagate the exception, we can attempt to
@@ -1698,8 +1785,9 @@ class Flask(_PackageBoundObject):
                 rv = handler(error, endpoint, values)
                 if rv is not None:
                     return rv
-            except BuildError as error:
-                pass
+            except BuildError as e:
+                # make error available outside except block (py3)
+                error = e
 
         # At this point we want to reraise the exception.  If the error is
         # still the same one we can reraise it with the original traceback,
@@ -1710,8 +1798,9 @@ class Flask(_PackageBoundObject):
 
     def preprocess_request(self):
         """Called before the actual request dispatching and will
-        call every as :meth:`before_request` decorated function.
-        If any of these function returns a value it's handled as
+        call each :meth:`before_request` decorated function, passing no
+        arguments.
+        If any of these functions returns a value, it's handled as
         if it was the return value from the view and further
         request handling is stopped.
 
@@ -1760,7 +1849,7 @@ class Flask(_PackageBoundObject):
             self.save_session(ctx.session, response)
         return response
 
-    def do_teardown_request(self, exc=None):
+    def do_teardown_request(self, exc=_sentinel):
         """Called after the actual request dispatching and will
         call every as :meth:`teardown_request` decorated function.  This is
         not actually called by the :class:`Flask` object itself but is always
@@ -1771,7 +1860,7 @@ class Flask(_PackageBoundObject):
            Added the `exc` argument.  Previously this was always using the
            current exception information.
         """
-        if exc is None:
+        if exc is _sentinel:
             exc = sys.exc_info()[1]
         funcs = reversed(self.teardown_request_funcs.get(None, ()))
         bp = _request_ctx_stack.top.request.blueprint
@@ -1781,14 +1870,14 @@ class Flask(_PackageBoundObject):
             func(exc)
         request_tearing_down.send(self, exc=exc)
 
-    def do_teardown_appcontext(self, exc=None):
+    def do_teardown_appcontext(self, exc=_sentinel):
         """Called when an application context is popped.  This works pretty
         much the same as :meth:`do_teardown_request` but for the application
         context.
 
         .. versionadded:: 0.9
         """
-        if exc is None:
+        if exc is _sentinel:
             exc = sys.exc_info()[1]
         for func in reversed(self.teardown_appcontext_funcs):
             func(exc)
@@ -1890,13 +1979,6 @@ class Flask(_PackageBoundObject):
             if self.should_ignore_error(error):
                 error = None
             ctx.auto_pop(error)
-
-    @property
-    def modules(self):
-        from warnings import warn
-        warn(DeprecationWarning('Flask.modules is deprecated, use '
-                                'Flask.blueprints instead'), stacklevel=2)
-        return self.blueprints
 
     def __call__(self, environ, start_response):
         """Shortcut for :attr:`wsgi_app`."""

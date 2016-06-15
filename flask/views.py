@@ -5,7 +5,7 @@
 
     This module provides class-based views inspired by the ones in Django.
 
-    :copyright: (c) 2014 by Armin Ronacher.
+    :copyright: (c) 2015 by Armin Ronacher.
     :license: BSD, see LICENSE for more details.
 """
 from .globals import request
@@ -48,7 +48,7 @@ class View(object):
     generated view function!
     """
 
-    #: A for which methods this pluggable view can handle.
+    #: A list of methods this view can handle.
     methods = None
 
     #: The canonical way to decorate class-based views is to decorate the

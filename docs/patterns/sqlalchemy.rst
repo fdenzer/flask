@@ -33,7 +33,7 @@ SQLAlchemy.  It allows you to define tables and models in one go, similar
 to how Django works.  In addition to the following text I recommend the
 official documentation on the `declarative`_ extension.
 
-Here the example :file:`database.py` module for your application::
+Here's the example :file:`database.py` module for your application::
 
     from sqlalchemy import create_engine
     from sqlalchemy.orm import scoped_session, sessionmaker
@@ -110,7 +110,7 @@ Querying is simple as well:
 
 .. _SQLAlchemy: http://www.sqlalchemy.org/
 .. _declarative:
-   http://docs.sqlalchemy.org/en/latest/orm/extensions/declarative.html
+   http://docs.sqlalchemy.org/en/latest/orm/extensions/declarative/
 
 Manual Object Relational Mapping
 --------------------------------

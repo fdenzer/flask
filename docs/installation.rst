@@ -85,7 +85,7 @@ And if you want to go back to the real world, use the following command::
 
     $ deactivate
 
-After doing this, the prompt of your shell should be as familar as before.
+After doing this, the prompt of your shell should be as familiar as before.
 
 Now, let's move on. Enter the following command to get Flask activated in your
 virtualenv::
@@ -116,7 +116,7 @@ it to operate on a git checkout.  Either way, virtualenv is recommended.
 
 Get the git checkout in a new virtualenv and run in development mode::
 
-    $ git clone http://github.com/mitsuhiko/flask.git
+    $ git clone http://github.com/pallets/flask.git
     Initialized empty Git repository in ~/dev/flask/.git/
     $ cd flask
     $ virtualenv venv
@@ -162,7 +162,7 @@ and :command:`python` which will run those things, but this might not automatica
 on Windows, because it doesn't know where those executables are (give either a try!).
 
 To fix this, you should be able to navigate to your Python install directory
-(e.g :file:`C:\Python27`), then go to :file:`Tools`, then :file:`Scripts`; then find the
+(e.g :file:`C:\Python27`), then go to :file:`Tools`, then :file:`Scripts`, then find the
 :file:`win_add2path.py` file and run that. Open a **new** Command Prompt and
 check that you can now just type :command:`python` to bring up the interpreter.
 
@@ -172,5 +172,5 @@ Finally, to install `virtualenv`_, you can simply run::
 
 Then you can be off on your way following the installation instructions above.
 
-.. _get-pip.py: https://raw.githubusercontent.com/pypa/pip/master/contrib/get-pip.py
+.. _get-pip.py: https://bootstrap.pypa.io/get-pip.py
 .. _ez_setup.py: https://bitbucket.org/pypa/setuptools/raw/bootstrap/ez_setup.py

@@ -6,11 +6,11 @@
     A microframework based on Werkzeug.  It's extensively documented
     and follows best practice patterns.
 
-    :copyright: (c) 2014 by Armin Ronacher.
+    :copyright: (c) 2015 by Armin Ronacher.
     :license: BSD, see LICENSE for more details.
 """
 
-__version__ = '0.11-dev'
+__version__ = '0.11.2-dev'
 
 # utilities we import from Werkzeug and Jinja2 that are unused
 # in the module but are exported as public interface.
@@ -34,7 +34,7 @@ from .templating import render_template, render_template_string
 from .signals import signals_available, template_rendered, request_started, \
      request_finished, got_request_exception, request_tearing_down, \
      appcontext_tearing_down, appcontext_pushed, \
-     appcontext_popped, message_flashed
+     appcontext_popped, message_flashed, before_render_template
 
 # We're not exposing the actual json module but a convenient wrapper around
 # it.

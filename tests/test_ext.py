@@ -5,7 +5,7 @@
 
     Tests the extension import thing.
 
-    :copyright: (c) 2014 by Armin Ronacher.
+    :copyright: (c) 2015 by Armin Ronacher.
     :license: BSD, see LICENSE for more details.
 """
 
@@ -18,6 +18,18 @@ except ImportError:
     reload_module = reload
 
 from flask._compat import PY2
+
+
+@pytest.fixture(autouse=True)
+def disable_extwarnings(request, recwarn):
+    from flask.exthook import ExtDeprecationWarning
+
+    def inner():
+        assert set(w.category for w in recwarn.list) \
+            <= set([ExtDeprecationWarning])
+        recwarn.clear()
+
+    request.addfinalizer(inner)
 
 
 @pytest.fixture(autouse=True)

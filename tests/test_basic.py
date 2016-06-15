@@ -5,7 +5,7 @@
 
     The basic functionality.
 
-    :copyright: (c) 2014 by Armin Ronacher.
+    :copyright: (c) 2015 by Armin Ronacher.
     :license: BSD, see LICENSE for more details.
 """
 
@@ -107,14 +107,23 @@ def test_disallow_string_for_allowed_methods():
 def test_url_mapping():
     app = flask.Flask(__name__)
 
+    random_uuid4 = "7eb41166-9ebf-4d26-b771-ea3f54f8b383"
+
     def index():
         return flask.request.method
 
     def more():
         return flask.request.method
 
+    def options():
+        return random_uuid4
+
+
     app.add_url_rule('/', 'index', index)
     app.add_url_rule('/more', 'more', more, methods=['GET', 'POST'])
+
+    # Issue 1288: Test that automatic options are not added when non-uppercase 'options' in methods
+    app.add_url_rule('/options', 'options', options, methods=['options'])
 
     c = app.test_client()
     assert c.get('/').data == b'GET'
@@ -129,6 +138,9 @@ def test_url_mapping():
     rv = c.delete('/more')
     assert rv.status_code == 405
     assert sorted(rv.allow) == ['GET', 'HEAD', 'OPTIONS', 'POST']
+    rv = c.open('/options', method='OPTIONS')
+    assert rv.status_code == 200
+    assert random_uuid4 in rv.data.decode("utf-8")
 
 
 def test_werkzeug_routing():
@@ -295,12 +307,8 @@ def test_missing_session():
     app = flask.Flask(__name__)
 
     def expect_exception(f, *args, **kwargs):
-        try:
-            f(*args, **kwargs)
-        except RuntimeError as e:
-            assert e.args and 'session is unavailable' in e.args[0]
-        else:
-            assert False, 'expected exception'
+        e = pytest.raises(RuntimeError, f, *args, **kwargs)
+        assert e.value.args and 'session is unavailable' in e.value.args[0]
     with app.test_request_context():
         assert flask.session.get('missing_key') is None
         expect_exception(flask.session.__setitem__, 'foo', 42)
@@ -563,6 +571,34 @@ def test_request_processing():
     assert rv == b'request|after'
 
 
+def test_request_preprocessing_early_return():
+    app = flask.Flask(__name__)
+    evts = []
+
+    @app.before_request
+    def before_request1():
+        evts.append(1)
+
+    @app.before_request
+    def before_request2():
+        evts.append(2)
+        return "hello"
+
+    @app.before_request
+    def before_request3():
+        evts.append(3)
+        return "bye"
+
+    @app.route('/')
+    def index():
+        evts.append('index')
+        return "damnit"
+
+    rv = app.test_client().get('/').data.strip()
+    assert rv == b'hello'
+    assert evts == [1, 2]
+
+
 def test_after_request_processing():
     app = flask.Flask(__name__)
     app.testing = True
@@ -813,12 +849,9 @@ def test_trapping_of_bad_request_key_errors():
 
     app.config['TRAP_BAD_REQUEST_ERRORS'] = True
     c = app.test_client()
-    try:
-        c.get('/fail')
-    except KeyError as e:
-        assert isinstance(e, BadRequest)
-    else:
-        assert False, 'Expected exception'
+    with pytest.raises(KeyError) as e:
+        c.get("/fail")
+    assert e.errisinstance(BadRequest)
 
 
 def test_trapping_of_all_http_exceptions():
@@ -848,13 +881,10 @@ def test_enctype_debug_helper():
     # stack otherwise and we want to ensure that this is not the case
     # to not negatively affect other tests.
     with app.test_client() as c:
-        try:
+        with pytest.raises(DebugFilesKeyError) as e:
             c.post('/fail', data={'foo': 'index.txt'})
-        except DebugFilesKeyError as e:
-            assert 'no file contents were transmitted' in str(e)
-            assert 'This was submitted: "index.txt"' in str(e)
-        else:
-            assert False, 'Expected exception'
+        assert 'no file contents were transmitted' in str(e.value)
+        assert 'This was submitted: "index.txt"' in str(e.value)
 
 
 def test_response_creation():
@@ -942,7 +972,7 @@ def test_make_response_with_response_instance():
         rv = flask.make_response(
             flask.jsonify({'msg': 'W00t'}), 400)
         assert rv.status_code == 400
-        assert rv.data == b'{\n  "msg": "W00t"\n}'
+        assert rv.data == b'{\n  "msg": "W00t"\n}\n'
         assert rv.mimetype == 'application/json'
 
         rv = flask.make_response(
@@ -963,7 +993,7 @@ def test_jsonify_no_prettyprint():
     app = flask.Flask(__name__)
     app.config.update({"JSONIFY_PRETTYPRINT_REGULAR": False})
     with app.test_request_context():
-        compressed_msg = b'{"msg":{"submsg":"W00t"},"msg2":"foobar"}'
+        compressed_msg = b'{"msg":{"submsg":"W00t"},"msg2":"foobar"}\n'
         uncompressed_msg = {
             "msg": {
                 "submsg": "W00t"
@@ -982,11 +1012,31 @@ def test_jsonify_prettyprint():
     with app.test_request_context():
         compressed_msg = {"msg":{"submsg":"W00t"},"msg2":"foobar"}
         pretty_response =\
-            b'{\n  "msg": {\n    "submsg": "W00t"\n  }, \n  "msg2": "foobar"\n}'
+            b'{\n  "msg": {\n    "submsg": "W00t"\n  }, \n  "msg2": "foobar"\n}\n'
 
         rv = flask.make_response(
             flask.jsonify(compressed_msg), 200)
         assert rv.data == pretty_response
+
+
+def test_jsonify_mimetype():
+    app = flask.Flask(__name__)
+    app.config.update({"JSONIFY_MIMETYPE": 'application/vnd.api+json'})
+    with app.test_request_context():
+        msg = {
+            "msg": {"submsg": "W00t"},
+        }
+        rv = flask.make_response(
+            flask.jsonify(msg), 200)
+        assert rv.mimetype == 'application/vnd.api+json'
+
+
+def test_jsonify_args_and_kwargs_check():
+    app = flask.Flask(__name__)
+    with app.test_request_context():
+        with pytest.raises(TypeError) as e:
+            flask.jsonify('fake args', kwargs='fake')
+        assert 'behavior undefined' in str(e.value)
 
 
 def test_url_generation():
@@ -1029,6 +1079,18 @@ def test_build_error_handler():
         assert flask.url_for('spam') == '/test_handler/'
 
 
+def test_build_error_handler_reraise():
+    app = flask.Flask(__name__)
+
+    # Test a custom handler which reraises the BuildError
+    def handler_raises_build_error(error, endpoint, values):
+        raise error
+    app.url_build_error_handlers.append(handler_raises_build_error)
+
+    with app.test_request_context():
+        pytest.raises(BuildError, flask.url_for, 'not.existing')
+
+
 def test_custom_converters():
     from werkzeug.routing import BaseConverter
 
@@ -1060,6 +1122,30 @@ def test_static_files():
         assert flask.url_for('static', filename='index.html') == \
             '/static/index.html'
     rv.close()
+
+
+def test_static_path_deprecated(recwarn):
+    app = flask.Flask(__name__, static_path='/foo')
+    recwarn.pop(DeprecationWarning)
+
+    app.testing = True
+    rv = app.test_client().get('/foo/index.html')
+    assert rv.status_code == 200
+    rv.close()
+
+    with app.test_request_context():
+        assert flask.url_for('static', filename='index.html') == '/foo/index.html'
+
+
+def test_static_url_path():
+    app = flask.Flask(__name__, static_url_path='/foo')
+    app.testing = True
+    rv = app.test_client().get('/foo/index.html')
+    assert rv.status_code == 200
+    rv.close()
+
+    with app.test_request_context():
+        assert flask.url_for('static', filename='index.html') == '/foo/index.html'
 
 
 def test_none_response():
@@ -1141,7 +1227,7 @@ def test_test_app_proper_environ():
 
 
 def test_exception_propagation():
-    def apprunner(configkey):
+    def apprunner(config_key):
         app = flask.Flask(__name__)
         app.config['LOGGER_HANDLER_POLICY'] = 'never'
 
@@ -1151,12 +1237,8 @@ def test_exception_propagation():
         c = app.test_client()
         if config_key is not None:
             app.config[config_key] = True
-            try:
+            with pytest.raises(Exception):
                 c.get('/')
-            except Exception:
-                pass
-            else:
-                assert False, 'expected exception'
         else:
             assert c.get('/').status_code == 500
 
@@ -1168,6 +1250,26 @@ def test_exception_propagation():
         t = Thread(target=apprunner, args=(config_key,))
         t.start()
         t.join()
+
+
+@pytest.mark.parametrize('debug', [True, False])
+@pytest.mark.parametrize('use_debugger', [True, False])
+@pytest.mark.parametrize('use_reloader', [True, False])
+@pytest.mark.parametrize('propagate_exceptions', [None, True, False])
+def test_werkzeug_passthrough_errors(monkeypatch, debug, use_debugger,
+                                     use_reloader, propagate_exceptions):
+    rv = {}
+
+    # Mocks werkzeug.serving.run_simple method
+    def run_simple_mock(*args, **kwargs):
+        rv['passthrough_errors'] = kwargs.get('passthrough_errors')
+
+    app = flask.Flask(__name__)
+    monkeypatch.setattr(werkzeug.serving, 'run_simple', run_simple_mock)
+    app.config['PROPAGATE_EXCEPTIONS'] = propagate_exceptions
+    app.run(debug=debug, use_debugger=use_debugger, use_reloader=use_reloader)
+    # make sure werkzeug always passes errors through
+    assert rv['passthrough_errors']
 
 
 def test_max_content_length():
@@ -1273,14 +1375,11 @@ def test_debug_mode_complains_after_first_request():
         return 'Awesome'
     assert not app.got_first_request
     assert app.test_client().get('/').data == b'Awesome'
-    try:
+    with pytest.raises(AssertionError) as e:
         @app.route('/foo')
         def broken():
             return 'Meh'
-    except AssertionError as e:
-        assert 'A setup function was called' in str(e)
-    else:
-        assert False, 'Expected exception'
+    assert 'A setup function was called' in str(e)
 
     app.debug = False
 
@@ -1336,14 +1435,11 @@ def test_routing_redirect_debugging():
     def foo():
         return 'success'
     with app.test_client() as c:
-        try:
+        with pytest.raises(AssertionError) as e:
             c.post('/foo', data={})
-        except AssertionError as e:
-            assert 'http://localhost/foo/' in str(e)
-            assert ('Make sure to directly send '
-                    'your POST-request to this URL') in str(e)
-        else:
-            assert False, 'Expected exception'
+        assert 'http://localhost/foo/' in str(e)
+        assert ('Make sure to directly send '
+                'your POST-request to this URL') in str(e)
 
         rv = c.get('/foo', data={}, follow_redirects=True)
         assert rv.data == b'success'

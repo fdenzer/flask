@@ -5,7 +5,7 @@
 
     Tests the request context.
 
-    :copyright: (c) 2014 by Armin Ronacher.
+    :copyright: (c) 2015 by Armin Ronacher.
     :license: BSD, see LICENSE for more details.
 """
 
@@ -46,6 +46,21 @@ def test_teardown_with_previous_exception():
 
     with app.test_request_context():
         assert buffer == []
+    assert buffer == [None]
+
+def test_teardown_with_handled_exception():
+    buffer = []
+    app = flask.Flask(__name__)
+    @app.teardown_request
+    def end_of_request(exception):
+        buffer.append(exception)
+
+    with app.test_request_context():
+        assert buffer == []
+        try:
+            raise Exception('dummy')
+        except Exception:
+            pass
     assert buffer == [None]
 
 def test_proper_test_request_context():
@@ -125,12 +140,8 @@ def test_manual_context_binding():
     ctx.push()
     assert index() == 'Hello World!'
     ctx.pop()
-    try:
+    with pytest.raises(RuntimeError):
         index()
-    except RuntimeError:
-        pass
-    else:
-        assert 0, 'expected runtime error'
 
 @pytest.mark.skipif(greenlet is None, reason='greenlet not installed')
 def test_greenlet_context_copying():
